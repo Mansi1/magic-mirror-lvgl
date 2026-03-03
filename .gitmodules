@@ -1,3 +1,6 @@
 [submodule "lvgl"]
 	path = lvgl
 	url = https://github.com/lvgl/lvgl.git
+[submodule "lv_drivers"]
+	path = lv_drivers
+	url = git@github.com:Mansi1/lv_drivers.git
