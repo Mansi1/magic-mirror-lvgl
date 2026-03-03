@@ -1,194 +1,96 @@
-/*******************************************************************
- *
- * main.c - LVGL simulator for GNU/Linux
- *
- * Based on the original file from the repository
- *
- * @note eventually this file won't contain a main function and will
- * become a library supporting all major operating systems
- *
- * To see how each driver is initialized check the
- * 'src/lib/display_backends' directory
- *
- * - Clean up
- * - Support for multiple backends at once
- *   2025 EDGEMTech Ltd.
- *
- * Author: EDGEMTech Ltd, Erik Tagirov (erik.tagirov@edgemtech.ch)
- *
- ******************************************************************/
+#include "lvgl/lvgl.h"
+#include "lv_drv_conf.h"
+#include "display/drm.h"
+#include "ui.h"
 #include <unistd.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/kd.h>
+#include <linux/vt.h>
 
-#include "lvgl/lvgl.h"
-#include "lvgl/demos/lv_demos.h"
+int main(void) {
+    printf("\n[DEBUG] Programm-Start...\n");
 
-#include "src/lib/driver_backends.h"
-#include "src/lib/simulator_util.h"
-#include "src/lib/simulator_settings.h"
-
-/* Internal functions */
-static void configure_simulator(int argc, char ** argv);
-static void print_lvgl_version(void);
-static void print_usage(void);
-
-/* contains the name of the selected backend if user
- * has specified one on the command line */
-static char * selected_backend;
-
-/* Global simulator settings, defined in lv_linux_backend.c */
-extern simulator_settings_t settings;
-
-
-/**
- * @brief Print LVGL version
- */
-static void print_lvgl_version(void)
-{
-    fprintf(stdout, "%d.%d.%d-%s\n",
-            LVGL_VERSION_MAJOR,
-            LVGL_VERSION_MINOR,
-            LVGL_VERSION_PATCH,
-            LVGL_VERSION_INFO);
-}
-
-/**
- * @brief Print usage information
- */
-static void print_usage(void)
-{
-    fprintf(stdout,
-            "\nlvglsim [-V] [-B] [-f] [-m] [-b backend_name] [-W window_width] [-H window_height] [-R rotation]\n\n");
-    fprintf(stdout, "-V print LVGL version\n");
-    fprintf(stdout, "-B list supported backends\n");
-    fprintf(stdout, "-f fullscreen\n");
-    fprintf(stdout, "-m maximize\n");
-}
-
-/**
- * @brief Configure simulator
- * @description process arguments received by the program to select
- * appropriate options
- * @param argc the count of arguments in argv
- * @param argv The arguments
- */
-static void configure_simulator(int argc, char ** argv)
-{
-    int opt = 0;
-
-    selected_backend = NULL;
-    driver_backends_register();
-
-    const char * env_w = getenv("LV_SIM_WINDOW_WIDTH");
-    const char * env_h = getenv("LV_SIM_WINDOW_HEIGHT");
-    /* Default values */
-    settings.window_width = atoi(env_w ? env_w : "800");
-    settings.window_height = atoi(env_h ? env_h : "480");
-
-    /* Parse the command-line options. */
-    while((opt = getopt(argc, argv, "b:fmW:H:R:BVh")) != -1) {
-        switch(opt) {
-            case 'h':
-                print_usage();
-                exit(EXIT_SUCCESS);
-                break;
-            case 'V':
-                print_lvgl_version();
-                exit(EXIT_SUCCESS);
-                break;
-            case 'B':
-                driver_backends_print_supported();
-                exit(EXIT_SUCCESS);
-                break;
-            case 'b':
-                if(driver_backends_is_supported(optarg) == 0) {
-                    die("error no such backend: %s\n", optarg);
-                }
-                selected_backend = strdup(optarg);
-                break;
-            case 'f':
-                settings.fullscreen = true;
-                break;
-            case 'm':
-                settings.maximize = true;
-                break;
-            case 'W':
-                settings.window_width = atoi(optarg);
-                break;
-            case 'H':
-                settings.window_height = atoi(optarg);
-                break;
-            case 'R':
-                switch(atoi(optarg)) {
-                    case 0:
-                        settings.rotation = LV_DISPLAY_ROTATION_0;
-                        break;
-                    case 90:
-                        settings.rotation = LV_DISPLAY_ROTATION_90;
-                        break;
-                    case 180:
-                        settings.rotation = LV_DISPLAY_ROTATION_180;
-                        break;
-                    case 270:
-                        settings.rotation = LV_DISPLAY_ROTATION_270;
-                        break;
-                    default:
-                        LV_LOG_WARN("Invalid rotation angle. Valid angles are {0, 90, 180, 270}");
-                        break;
-                }
-                break;
-            case ':':
-                print_usage();
-                die("Option -%c requires an argument.\n", optopt);
-                break;
-            case '?':
-                print_usage();
-                die("Unknown option -%c.\n", optopt);
-        }
+    // 1. Konsole/Cursor killen
+    int vt_fd = open("/dev/tty1", O_RDWR); 
+    if (vt_fd >= 0) {
+        ioctl(vt_fd, KDSETMODE, KD_GRAPHICS);
+        close(vt_fd);
+        printf("[DEBUG] Terminal-Grafikmodus aktiviert.\n");
     }
-}
 
-/**
- * @brief entry point
- * @description start a demo
- * @param argc the count of arguments in argv
- * @param argv The arguments
- */
-int main(int argc, char ** argv)
-{
-
-    configure_simulator(argc, argv);
-
-    /* Initialize LVGL. */
     lv_init();
 
-    /* Initialize the configured backend */
-    if(driver_backends_init_backend(selected_backend) == -1) {
-        die("Failed to initialize display backend");
+    // 2. Hardware Driver Init
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    if (drm_disp_drv_init(&disp_drv) < 0) {
+        printf("[ERROR] DRM-Initialisierung fehlgeschlagen!\n");
+        return -1;
     }
-    if(settings.rotation) {
-#if LV_USE_DRAW_NANOVG && LV_DRAW_TRANSFORM_USE_MATRIX
-        lv_display_set_matrix_rotation(NULL, true);
-#endif
-        lv_display_set_rotation(NULL, settings.rotation);
+    printf("[DEBUG] DRM-Treiber bereit.\n");
+
+    // 3. Single Buffer (Heap)
+    uint32_t width = 1920;
+    uint32_t height = 1080;
+    uint32_t buf_size = width * height / 10;
+    lv_color_t *buf1 = malloc(buf_size * sizeof(lv_color_t));
+    
+    if (buf1 == NULL) {
+        printf("[ERROR] Speicher fuer Buffer konnte nicht reserviert werden!\n");
+        return -1;
     }
 
-    /* Enable for EVDEV support */
-#if LV_USE_EVDEV
-    if(driver_backends_init_backend("EVDEV") == -1) {
-        die("Failed to initialize evdev");
+    static lv_disp_draw_buf_t draw_buf;
+    lv_disp_draw_buf_init(&draw_buf, buf1, NULL, buf_size);
+
+    disp_drv.draw_buf = &draw_buf;
+    disp_drv.flush_cb = drm_flush;
+    disp_drv.hor_res = width;
+    disp_drv.ver_res = height;
+    lv_disp_drv_register(&disp_drv);
+    printf("[DEBUG] LVGL Display-Treiber registriert.\n");
+
+    // 4. UI Initialisierung
+    printf("[DEBUG] Rufe ui_init() auf...\n");
+    ui_init(); 
+
+    // 5. Screen-Check & Force-Setup
+    if (objects.main != NULL) {
+        printf("[DEBUG] objects.main gefunden! Erzwinger Styles...\n");
+        
+        // Hintergrund auf Schwarz
+        lv_obj_set_style_bg_color(objects.main, lv_color_hex(0xFF0000), 0);
+        lv_obj_set_style_bg_opa(objects.main, LV_OPA_COVER, 0);
+        
+        // Sofort laden
+        lv_scr_load(objects.main);
+        printf("[DEBUG] Screen geladen. Starte Fade-In Animation (200ms)...\n");
+        
+        // Fade-In Animation
+        lv_scr_load_anim(objects.main, LV_SCR_LOAD_ANIM_FADE_IN, 200, 0, false);
+    } else {
+        printf("[ERROR] objects.main ist NULL! Check deine ui.h/ui.c\n");
     }
-#endif
 
-    /*Create a Demo*/
-    lv_demo_widgets();
-    lv_demo_widgets_start_slideshow();
+    // 6. Loop mit Heartbeat-Counter
+    unsigned int counter = 0;
+    printf("[DEBUG] Betrete Main-Loop...\n");
 
-    /* Enter the run loop of the selected backend */
-    driver_backends_run_loop();
+    while(1) {
+        lv_timer_handler();
+        ui_tick(); 
+        
+        // Alle ~5 Sekunden ein Lebenszeichen ausgeben (5ms * 1000)
+        if (counter % 1000 == 0) {
+            printf("[HEARTBEAT] Loop laeuft... (Tick: %u)\n", counter);
+        }
+        
+        counter++;
+        usleep(5000);
+    }
 
     return 0;
 }

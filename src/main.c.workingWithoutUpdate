@@ -1,0 +1,71 @@
+#include "lvgl/lvgl.h"
+#include "lv_drv_conf.h"
+#include "display/drm.h"
+#include "ui.h"
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/kd.h>
+#include <linux/vt.h>
+
+// Link zur EEZ-Generierung
+extern void create_screen_main();
+
+int main(void) {
+    // 1. Konsole killen (verhindert weißes Flackern/Cursor)
+    int vt_fd = open("/dev/tty1", O_RDWR); 
+    if (vt_fd >= 0) {
+        ioctl(vt_fd, KDSETMODE, KD_GRAPHICS);
+        close(vt_fd);
+    }
+
+    lv_init();
+
+    // 2. DRM Hardware Init
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    if (drm_disp_drv_init(&disp_drv) < 0) return -1;
+
+    // 3. Buffer auf dem Heap (Stabil für 1080p)
+    uint32_t width = 1920;
+    uint32_t height = 1080;
+    uint32_t buf_size = width * height / 10;
+    lv_color_t *buf1 = malloc(buf_size * sizeof(lv_color_t));
+    lv_color_t *buf2 = malloc(buf_size * sizeof(lv_color_t));
+
+    static lv_disp_draw_buf_t draw_buf;
+    lv_disp_draw_buf_init(&draw_buf, buf1, buf2, buf_size);
+
+    disp_drv.draw_buf = &draw_buf;
+    disp_drv.flush_cb = drm_flush; // Nutzt deine funktionierende Buffer-0-Logik
+    disp_drv.hor_res = width;
+    disp_drv.ver_res = height;
+    lv_disp_drv_register(&disp_drv);
+
+    // 4. UI erstellen
+    create_screen_main();
+
+    // 5. MANUELLER FIX (Der Teil, der funktioniert hatte)
+    if (objects.main != NULL) {
+        // Hintergrund knallhart auf Schwarz stellen
+        lv_obj_set_style_bg_color(objects.main, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(objects.main, LV_OPA_COVER, 0);
+        
+        // Sofort laden ohne Animation
+        lv_scr_load(objects.main);
+    }
+
+    // 6. Loop
+    while(1) {
+        lv_timer_handler();
+        // Wir rufen ui_tick nur auf, wenn das Screen-Objekt wirklich bereit ist
+        if (objects.main != NULL) {
+//            ui_tick();
+        }        
+        usleep(5000);
+    }
+
+    return 0;
+}
